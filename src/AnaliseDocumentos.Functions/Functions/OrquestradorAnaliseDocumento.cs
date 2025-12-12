@@ -81,16 +81,54 @@ public class OrquestradorAnaliseDocumento
                 ProcessadoEm = contexto.CurrentUtcDateTime
             };
         }
+
+    private static string LimparJsonMarkdown(string jsonComMarkdown)
+    {
+        if(string.IsNullOrEmpty(jsonComMarkdown))
+            return jsonComMarkdown;
+
+        return jsonComMarkdown.Replace("```json", "")
+               .Replace("```", "")
+               .Trim();
+    }
+
     [Function("Activity_ExtrairTexto")]
     public async Task<string> ExtrairTexto([ActivityTrigger] byte[] bytesArquivo)
     {
-        // Executado pelo Worker, pode demorar o tempo que for
-        return await _ocrService.ExtrairTextoAsync(bytesArquivo);
+        try 
+        {
+            return await _ocrService.ExtrairTextoAsync(bytesArquivo);
+        }
+        catch (Azure.RequestFailedException ex)
+        {
+            // "Limpamos" a exceção para evitar o AmbiguousMatchException no Durable Task
+            throw new InvalidOperationException($"Erro no OCR (Status {ex.Status}): {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Erro genérico no OCR: {ex.Message}");
+        }
     }
 
     [Function("Activity_AnalisarFoundry")]
     public async Task<string> AnalisarFoundry([ActivityTrigger] string texto)
     {
-        return await _foundryService.AnalisarTextoAsync(texto);
+        try
+        {
+            string retorno =  await _foundryService.AnalisarTextoAsync(texto);
+            string jsonLimpo = LimparJsonMarkdown(retorno);
+
+            return jsonLimpo;
+        }
+        catch (Azure.RequestFailedException ex)
+        {
+            // AQUI está o erro 403 escondido. Ao converter para InvalidOperationException, 
+            // o Durable vai conseguir serializar e te mostrar a mensagem real.
+            throw new InvalidOperationException($"Erro no Foundry (Status {ex.Status}): {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Erro genérico no Foundry: {ex.Message}");
+        }
     }
 }

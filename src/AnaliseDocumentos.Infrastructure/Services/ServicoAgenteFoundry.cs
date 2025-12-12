@@ -15,11 +15,15 @@ public class ServicoAgenteFoundry : IServicoFoundry
 
     public ServicoAgenteFoundry(IConfiguration configuration)
     {
-        // Extrai as configurações necessárias
-        var projectEndpoint = configuration["FoundryProjectEndpoint"] ?? throw new ArgumentNullException("FoundryProjectEndpoint not configured.");
-        _agentId = configuration["FoundryAgentId"] ?? throw new ArgumentNullException("FoundryAgentId not configured.");
+        // Extrai as configurações necessárias, garantindo que não sejam nulas ou vazias.
+        var projectEndpoint = configuration["FoundryProjectEndpoint"];
+        _agentId = configuration["FoundryAgentId"]!;
 
-        // Cria os clientes usando a identidade gerenciada da Function
+        ArgumentException.ThrowIfNullOrEmpty(projectEndpoint, "FoundryProjectEndpoint");
+        ArgumentException.ThrowIfNullOrEmpty(_agentId, "FoundryAgentId");
+        
+        // Cria os clientes usando a identidade AAD (ex: login via AZ CLI, Managed Identity)
+        // Os SDKs beta do AI Studio/Projects não suportam AzureKeyCredential diretamente no construtor.
         var endpointUri = new Uri(projectEndpoint);
         AIProjectClient projectClient = new(endpointUri, new DefaultAzureCredential());
         _agentsClient = projectClient.GetPersistentAgentsClient();
