@@ -53,49 +53,39 @@ public class OrquestradorAnaliseDocumento
         return await cliente.CreateCheckStatusResponseAsync(requisicao, idInstancia);
     }
 
-        [Function("OrquestradorDocumento")]
-        public async Task<ResultadoAnaliseDocumento> ExecutarOrquestrador([OrchestrationTrigger] TaskOrchestrationContext contexto)
-        {
-            // Pega o input (bytes do arquivo)
-            byte[] bytesArquivo = contexto.GetInput<byte[]>();
-    
-            // Passo A: Retry Policy para o OCR (Resiliência)
-            var opcoesTentativa = TaskOptions.FromRetryPolicy(new RetryPolicy(
-                maxNumberOfAttempts: 3, 
-                firstRetryInterval: TimeSpan.FromSeconds(5)));
-    
-    #pragma warning disable CS8600
-            // Chamada Activity 1: OCR
-            string textoExtraido = await contexto.CallActivityAsync<string>("Activity_ExtrairTexto", bytesArquivo, opcoesTentativa);
-    #pragma warning restore CS8600
-    
-    #pragma warning disable CS8600
-            // Chamada Activity 2: Foundry Agent
-            string jsonAnalise = await contexto.CallActivityAsync<string>("Activity_AnalisarFoundry", textoExtraido);
-    #pragma warning restore CS8600
-    
-            return new ResultadoAnaliseDocumento
-            {
-                ContratoId = contexto.InstanceId,
-                JsonAnalise = jsonAnalise,
-                ProcessadoEm = contexto.CurrentUtcDateTime
-            };
-        }
-
-    private static string LimparJsonMarkdown(string jsonComMarkdown)
+    [Function("OrquestradorDocumento")]
+    public async Task<ResultadoAnaliseDocumento> ExecutarOrquestrador([OrchestrationTrigger] TaskOrchestrationContext contexto)
     {
-        if(string.IsNullOrEmpty(jsonComMarkdown))
-            return jsonComMarkdown;
+        // Pega o input (bytes do arquivo)
+        byte[] bytesArquivo = contexto.GetInput<byte[]>();
 
-        return jsonComMarkdown.Replace("```json", "")
-               .Replace("```", "")
-               .Trim();
+        // Passo A: Retry Policy para o OCR (Resiliência)
+        var opcoesTentativa = TaskOptions.FromRetryPolicy(new RetryPolicy(
+            maxNumberOfAttempts: 3,
+            firstRetryInterval: TimeSpan.FromSeconds(5)));
+
+#pragma warning disable CS8600
+        // Chamada Activity 1: OCR
+        string textoExtraido = await contexto.CallActivityAsync<string>("Activity_ExtrairTexto", bytesArquivo, opcoesTentativa);
+#pragma warning restore CS8600
+
+#pragma warning disable CS8600
+        // Chamada Activity 2: Foundry Agent
+        string jsonAnalise = await contexto.CallActivityAsync<string>("Activity_AnalisarFoundry", textoExtraido);
+#pragma warning restore CS8600
+
+        return new ResultadoAnaliseDocumento
+        {
+            ContratoId = contexto.InstanceId,
+            JsonAnalise = jsonAnalise,
+            ProcessadoEm = contexto.CurrentUtcDateTime
+        };
     }
 
     [Function("Activity_ExtrairTexto")]
     public async Task<string> ExtrairTexto([ActivityTrigger] byte[] bytesArquivo)
     {
-        try 
+        try
         {
             return await _ocrService.ExtrairTextoAsync(bytesArquivo);
         }
@@ -115,7 +105,7 @@ public class OrquestradorAnaliseDocumento
     {
         try
         {
-            string retorno =  await _foundryService.AnalisarTextoAsync(texto);
+            string retorno = await _foundryService.AnalisarTextoAsync(texto);
             string jsonLimpo = LimparJsonMarkdown(retorno);
 
             return jsonLimpo;
@@ -130,5 +120,14 @@ public class OrquestradorAnaliseDocumento
         {
             throw new InvalidOperationException($"Erro genérico no Foundry: {ex.Message}");
         }
+    }
+    private static string LimparJsonMarkdown(string jsonComMarkdown)
+    {
+        if (string.IsNullOrEmpty(jsonComMarkdown))
+            return jsonComMarkdown;
+
+        return jsonComMarkdown.Replace("```json", "")
+               .Replace("```", "")
+               .Trim();
     }
 }

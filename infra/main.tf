@@ -195,3 +195,19 @@ resource "azurerm_role_assignment" "func_doc_intel_role" {
   role_definition_name = "Cognitive Services User"
   principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
 }
+
+# Adicione isso ao final do arquivo infra/main.tf
+
+# Permissão para a Function atuar como Desenvolvedora de AI (Necessário para o Agente)
+resource "azurerm_role_assignment" "func_ai_developer" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Azure AI Developer"
+  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+}
+
+# Permissão para a Function usar serviços Cognitivos/OpenAI
+resource "azurerm_role_assignment" "func_cognitive_user" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Cognitive Services OpenAI Contributor"
+  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+}
