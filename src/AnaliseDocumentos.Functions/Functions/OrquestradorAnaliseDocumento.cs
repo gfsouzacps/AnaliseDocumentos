@@ -32,7 +32,6 @@ public class OrquestradorAnaliseDocumento
     {
         _logger.LogInformation("Recebendo documento...");
 
-        // Ler bytes do body (Para >50MB considerar upload direto no Blob antes de chamar a func)
         using var fluxoMemoria = new MemoryStream();
         await requisicao.Body.CopyToAsync(fluxoMemoria);
         byte[] bytesArquivo = fluxoMemoria.ToArray();
@@ -44,12 +43,11 @@ public class OrquestradorAnaliseDocumento
             return respostaRuim;
         }
 
-        // Inicia Orquestração passando o binário
         string idInstancia = await cliente.ScheduleNewOrchestrationInstanceAsync("OrquestradorDocumento", bytesArquivo);
 
         _logger.LogInformation($"Orquestração iniciada: {idInstancia}");
 
-        // Retorna 202 Accepted com headers para polling (statusQueryGetUri)
+        // Retorna 202 Accepted com headers para polling
         return await cliente.CreateCheckStatusResponseAsync(requisicao, idInstancia);
     }
 
@@ -59,7 +57,7 @@ public class OrquestradorAnaliseDocumento
         // Pega o input (bytes do arquivo)
         byte[] bytesArquivo = contexto.GetInput<byte[]>();
 
-        // Passo A: Retry Policy para o OCR (Resiliência)
+        // Política de retentativa para chamadas externas
         var opcoesTentativa = TaskOptions.FromRetryPolicy(new RetryPolicy(
             maxNumberOfAttempts: 3,
             firstRetryInterval: TimeSpan.FromSeconds(5)));
@@ -67,10 +65,8 @@ public class OrquestradorAnaliseDocumento
 #pragma warning disable CS8600
         // Chamada Activity 1: OCR
         string textoExtraido = await contexto.CallActivityAsync<string>("Activity_ExtrairTexto", bytesArquivo, opcoesTentativa);
-#pragma warning restore CS8600
 
-#pragma warning disable CS8600
-        // Chamada Activity 2: Foundry Agent
+        // Chamada Activity 2: Foundry Agent (Já retorna o JSON limpo)
         string jsonAnalise = await contexto.CallActivityAsync<string>("Activity_AnalisarFoundry", textoExtraido);
 #pragma warning restore CS8600
 
@@ -91,7 +87,7 @@ public class OrquestradorAnaliseDocumento
         }
         catch (Azure.RequestFailedException ex)
         {
-            // "Limpamos" a exceção para evitar o AmbiguousMatchException no Durable Task
+            // "Encapsula" exceções do Azure para melhor serialização no Durable
             throw new InvalidOperationException($"Erro no OCR (Status {ex.Status}): {ex.Message}");
         }
         catch (Exception ex)
@@ -105,29 +101,16 @@ public class OrquestradorAnaliseDocumento
     {
         try
         {
-            string retorno = await _foundryService.AnalisarTextoAsync(texto);
-            string jsonLimpo = LimparJsonMarkdown(retorno);
-
-            return jsonLimpo;
+            // O código aqui ficou limpo, delegando a responsabilidade total ao serviço
+            return await _foundryService.AnalisarTextoAsync(texto);
         }
         catch (Azure.RequestFailedException ex)
         {
-            // AQUI está o erro 403 escondido. Ao converter para InvalidOperationException, 
-            // o Durable vai conseguir serializar e te mostrar a mensagem real.
             throw new InvalidOperationException($"Erro no Foundry (Status {ex.Status}): {ex.Message}");
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"Erro genérico no Foundry: {ex.Message}");
         }
-    }
-    private static string LimparJsonMarkdown(string jsonComMarkdown)
-    {
-        if (string.IsNullOrEmpty(jsonComMarkdown))
-            return jsonComMarkdown;
-
-        return jsonComMarkdown.Replace("```json", "")
-               .Replace("```", "")
-               .Trim();
     }
 }

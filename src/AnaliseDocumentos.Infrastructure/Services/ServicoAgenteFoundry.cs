@@ -21,9 +21,8 @@ public class ServicoAgenteFoundry : IServicoFoundry
 
         ArgumentException.ThrowIfNullOrEmpty(projectEndpoint, "FoundryProjectEndpoint");
         ArgumentException.ThrowIfNullOrEmpty(_agentId, "FoundryAgentId");
-        
+
         // Cria os clientes usando a identidade AAD (ex: login via AZ CLI, Managed Identity)
-        // Os SDKs beta do AI Studio/Projects não suportam AzureKeyCredential diretamente no construtor.
         var endpointUri = new Uri(projectEndpoint);
         AIProjectClient projectClient = new(endpointUri, new DefaultAzureCredential());
         _agentsClient = projectClient.GetPersistentAgentsClient();
@@ -76,10 +75,22 @@ public class ServicoAgenteFoundry : IServicoFoundry
                         responseBuilder.Append(textItem.Text);
                     }
                 }
-                return responseBuilder.ToString();
+
+                return LimparJsonMarkdown(responseBuilder.ToString());
             }
         }
 
         return string.Empty; // Retorna vazio se não houver resposta do assistente
+    }
+
+    private static string LimparJsonMarkdown(string jsonComMarkdown)
+    {
+        if (string.IsNullOrEmpty(jsonComMarkdown))
+            return jsonComMarkdown;
+
+        return jsonComMarkdown
+               .Replace("```json", "")
+               .Replace("```", "")
+               .Trim();
     }
 }
