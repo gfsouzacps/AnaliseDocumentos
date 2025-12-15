@@ -15,14 +15,12 @@ public class ServicoAgenteFoundry : IServicoFoundry
 
     public ServicoAgenteFoundry(IConfiguration configuration)
     {
-        // Extrai as configurações necessárias, garantindo que não sejam nulas ou vazias.
         var projectEndpoint = configuration["FoundryProjectEndpoint"];
         _agentId = configuration["FoundryAgentId"]!;
 
         ArgumentException.ThrowIfNullOrEmpty(projectEndpoint, "FoundryProjectEndpoint");
         ArgumentException.ThrowIfNullOrEmpty(_agentId, "FoundryAgentId");
 
-        // Cria os clientes usando a identidade AAD (ex: login via AZ CLI, Managed Identity)
         var endpointUri = new Uri(projectEndpoint);
         AIProjectClient projectClient = new(endpointUri, new DefaultAzureCredential());
         _agentsClient = projectClient.GetPersistentAgentsClient();
@@ -30,21 +28,17 @@ public class ServicoAgenteFoundry : IServicoFoundry
 
     public async Task<string> AnalisarTextoAsync(string texto)
     {
-        // 1. Cria uma nova thread de conversação
         PersistentAgentThread thread = await _agentsClient.Threads.CreateThreadAsync();
 
-        // 2. Adiciona a mensagem do usuário (texto do OCR) à thread
         await _agentsClient.Messages.CreateMessageAsync(
             thread.Id,
             MessageRole.User,
             texto);
 
-        // 3. Executa o agente na thread
         ThreadRun run = await _agentsClient.Runs.CreateRunAsync(
             thread.Id,
             _agentId);
 
-        // 4. Aguarda a conclusão da execução
         do
         {
             await Task.Delay(TimeSpan.FromSeconds(1));
@@ -55,14 +49,12 @@ public class ServicoAgenteFoundry : IServicoFoundry
         if (run.Status != RunStatus.Completed)
         {
             var errorMessage = run.LastError?.Message ?? "Unknown error.";
-            throw new InvalidOperationException($"Run failed, was canceled, or expired. Status: {run.Status}. Error: {errorMessage}");
+            throw new InvalidOperationException($"Run failed: {run.Status}. Error: {errorMessage}");
         }
 
-        // 5. Recupera as mensagens da thread
         AsyncPageable<PersistentThreadMessage> messages = _agentsClient.Messages.GetMessagesAsync(
             thread.Id, order: ListSortOrder.Descending);
 
-        // 6. Encontra a última resposta do assistente e a retorna
         await foreach (PersistentThreadMessage threadMessage in messages)
         {
             if (threadMessage.Role == MessageRole.Agent)
@@ -75,14 +67,15 @@ public class ServicoAgenteFoundry : IServicoFoundry
                         responseBuilder.Append(textItem.Text);
                     }
                 }
-
+                // Limpeza acontece aqui, antes de devolver ao orquestrador
                 return LimparJsonMarkdown(responseBuilder.ToString());
             }
         }
 
-        return string.Empty; // Retorna vazio se não houver resposta do assistente
+        return string.Empty;
     }
 
+    // Helper privado: Responsabilidade de limpeza é deste serviço
     private static string LimparJsonMarkdown(string jsonComMarkdown)
     {
         if (string.IsNullOrEmpty(jsonComMarkdown))

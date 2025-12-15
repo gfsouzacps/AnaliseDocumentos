@@ -17,17 +17,14 @@ public class ServicoAzureDocIntel : IServicoOcr
         _logger = logger;
     }
 
-    public async Task<string> ExtrairTextoAsync(byte[] conteudoArquivo)
+    public async Task<string> ExtrairTextoAsync(Uri urlArquivo)
     {
         _logger.LogInformation("Iniciando OCR no Document Intelligence...");
 
-        using var fluxo = new MemoryStream(conteudoArquivo);
-
-        // 'prebuilt-layout' é crucial para contratos para manter estrutura de parágrafos
-        Operation<AnalyzeResult> operacao = await _client.AnalyzeDocumentAsync(
+        Operation<AnalyzeResult> operacao = await _client.AnalyzeDocumentFromUriAsync(
             WaitUntil.Completed,
             "prebuilt-layout", 
-            fluxo);
+            urlArquivo);
 
         AnalyzeResult resultado = operacao.Value;
         var sb = new StringBuilder();

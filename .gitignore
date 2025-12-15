@@ -270,4 +270,23 @@ __pycache__/
 .terraform.lock.hcl
 
 # Zip files
+
 *.zip
+
+
+
+# Temporary files
+
+*.tmp.txt
+
+
+
+# Publish profiles and service dependencies
+
+**/Properties/PublishProfiles/
+
+**/Properties/ServiceDependencies/
+
+**/Properties/serviceDependencies.func-analisecontratos-vu1 - Zip Deploy.json
+
+**/Properties/serviceDependencies.json

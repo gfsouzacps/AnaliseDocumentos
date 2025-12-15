@@ -1,5 +1,8 @@
 using AnaliseDocumentos.Core.Interfaces;
 using AnaliseDocumentos.Core.Models;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.DurableTask;
@@ -14,15 +17,18 @@ public class OrquestradorAnaliseDocumento
     private readonly ILogger<OrquestradorAnaliseDocumento> _logger;
     private readonly IServicoOcr _ocrService;
     private readonly IServicoFoundry _foundryService;
+    private readonly BlobServiceClient _blobServiceClient;
 
     public OrquestradorAnaliseDocumento(
         ILogger<OrquestradorAnaliseDocumento> logger,
         IServicoOcr ocrService,
-        IServicoFoundry foundryService)
+        IServicoFoundry foundryService,
+        BlobServiceClient blobServiceClient)
     {
         _logger = logger;
         _ocrService = ocrService;
         _foundryService = foundryService;
+        _blobServiceClient = blobServiceClient;
     }
 
     [Function("SubmeterDocumento")]
@@ -30,43 +36,90 @@ public class OrquestradorAnaliseDocumento
         [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData requisicao,
         [DurableClient] DurableTaskClient cliente)
     {
-        _logger.LogInformation("Recebendo documento...");
+        _logger.LogInformation("Recebendo documento para upload...");
 
-        using var fluxoMemoria = new MemoryStream();
-        await requisicao.Body.CopyToAsync(fluxoMemoria);
-        byte[] bytesArquivo = fluxoMemoria.ToArray();
-
-        if (bytesArquivo.Length == 0)
+        // CORREÇÃO CRÍTICA: Não verificar .Length (quebra o stream). Verificar apenas se é nulo.
+        if (requisicao.Body == null)
         {
             var respostaRuim = requisicao.CreateResponse(HttpStatusCode.BadRequest);
-            await respostaRuim.WriteStringAsync("Arquivo vazio.");
+            await respostaRuim.WriteStringAsync("Corpo da requisição vazio.");
             return respostaRuim;
         }
 
-        string idInstancia = await cliente.ScheduleNewOrchestrationInstanceAsync("OrquestradorDocumento", bytesArquivo);
+        try
+        {
+            // 1. Detectar extensão via Header
+            string contentType = "application/octet-stream";
+            if (requisicao.Headers.TryGetValues("Content-Type", out var headerValues))
+            {
+                contentType = headerValues.FirstOrDefault() ?? "application/octet-stream";
+            }
+            string extensao = ObterExtensaoPorMimeType(contentType);
 
-        _logger.LogInformation($"Orquestração iniciada: {idInstancia}");
+            // 2. Upload para Blob Storage (Padrão Claim Check)
+            var containerClient = _blobServiceClient.GetBlobContainerClient("documentos-upload");
+            await containerClient.CreateIfNotExistsAsync();
 
-        // Retorna 202 Accepted com headers para polling
-        return await cliente.CreateCheckStatusResponseAsync(requisicao, idInstancia);
+            string blobName = $"{Guid.NewGuid()}{extensao}";
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            _logger.LogInformation($"Iniciando upload para Blob: {blobName} (Tipo: {contentType})...");
+
+            var opcoesUpload = new BlobUploadOptions
+            {
+                HttpHeaders = new BlobHttpHeaders { ContentType = contentType }
+            };
+
+            // Upload via Stream direto (Sem carregar tudo na memória RAM)
+            await blobClient.UploadAsync(requisicao.Body, opcoesUpload);
+
+            _logger.LogInformation("Upload concluído. Gerando SAS...");
+
+            // 3. Gerar SAS URI (Token de leitura temporário para o OCR)
+            var sasBuilder = new BlobSasBuilder
+            {
+                BlobContainerName = containerClient.Name,
+                BlobName = blobName,
+                Resource = "b",
+                ExpiresOn = DateTimeOffset.UtcNow.AddHours(24)
+            };
+            sasBuilder.SetPermissions(BlobSasPermissions.Read);
+            Uri sasUri = blobClient.GenerateSasUri(sasBuilder);
+
+            // 4. Inicia Orquestração passando APENAS A URL
+            string idInstancia = await cliente.ScheduleNewOrchestrationInstanceAsync("OrquestradorDocumento", sasUri.ToString());
+
+            _logger.LogInformation($"Orquestração iniciada: {idInstancia}");
+
+            return await cliente.CreateCheckStatusResponseAsync(requisicao, idInstancia);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Erro no processamento do upload: {Message}", ex.Message);
+            var erro = requisicao.CreateResponse(HttpStatusCode.InternalServerError);
+            await erro.WriteStringAsync($"Erro interno: {ex.Message}");
+            return erro;
+        }
     }
 
     [Function("OrquestradorDocumento")]
     public async Task<ResultadoAnaliseDocumento> ExecutarOrquestrador([OrchestrationTrigger] TaskOrchestrationContext contexto)
     {
-        // Pega o input (bytes do arquivo)
-        byte[] bytesArquivo = contexto.GetInput<byte[]>();
+        // O input agora é uma URL (string), muito leve
+        string urlArquivo = contexto.GetInput<string>()
+            ?? throw new ArgumentNullException("URL de entrada nula");
 
-        // Política de retentativa para chamadas externas
+        Uri uriArquivo = new Uri(urlArquivo);
+
         var opcoesTentativa = TaskOptions.FromRetryPolicy(new RetryPolicy(
             maxNumberOfAttempts: 3,
             firstRetryInterval: TimeSpan.FromSeconds(5)));
 
 #pragma warning disable CS8600
-        // Chamada Activity 1: OCR
-        string textoExtraido = await contexto.CallActivityAsync<string>("Activity_ExtrairTexto", bytesArquivo, opcoesTentativa);
+        // Activity 1: OCR (Recebe URL)
+        string textoExtraido = await contexto.CallActivityAsync<string>("Activity_ExtrairTexto", uriArquivo, opcoesTentativa);
 
-        // Chamada Activity 2: Foundry Agent (Já retorna o JSON limpo)
+        // Activity 2: Foundry (Recebe Texto)
         string jsonAnalise = await contexto.CallActivityAsync<string>("Activity_AnalisarFoundry", textoExtraido);
 #pragma warning restore CS8600
 
@@ -79,15 +132,14 @@ public class OrquestradorAnaliseDocumento
     }
 
     [Function("Activity_ExtrairTexto")]
-    public async Task<string> ExtrairTexto([ActivityTrigger] byte[] bytesArquivo)
+    public async Task<string> ExtrairTexto([ActivityTrigger] Uri urlArquivo)
     {
         try
         {
-            return await _ocrService.ExtrairTextoAsync(bytesArquivo);
+            return await _ocrService.ExtrairTextoAsync(urlArquivo);
         }
         catch (Azure.RequestFailedException ex)
         {
-            // "Encapsula" exceções do Azure para melhor serialização no Durable
             throw new InvalidOperationException($"Erro no OCR (Status {ex.Status}): {ex.Message}");
         }
         catch (Exception ex)
@@ -101,7 +153,6 @@ public class OrquestradorAnaliseDocumento
     {
         try
         {
-            // O código aqui ficou limpo, delegando a responsabilidade total ao serviço
             return await _foundryService.AnalisarTextoAsync(texto);
         }
         catch (Azure.RequestFailedException ex)
@@ -112,5 +163,22 @@ public class OrquestradorAnaliseDocumento
         {
             throw new InvalidOperationException($"Erro genérico no Foundry: {ex.Message}");
         }
+    }
+
+    // Método auxiliar mantido AQUI (camada de entrada HTTP)
+    private static string ObterExtensaoPorMimeType(string mimeType)
+    {
+        return mimeType.ToLower().Trim() switch
+        {
+            "application/pdf" => ".pdf",
+            "image/jpeg" => ".jpg",
+            "image/jpg" => ".jpg",
+            "image/png" => ".png",
+            "image/tiff" => ".tiff",
+            "image/bmp" => ".bmp",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+            "application/msword" => ".doc",
+            _ => ".bin"
+        };
     }
 }

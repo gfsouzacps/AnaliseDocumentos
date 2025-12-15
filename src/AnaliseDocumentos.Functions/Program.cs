@@ -1,11 +1,14 @@
-using Azure;
-using Azure.AI.FormRecognizer.DocumentAnalysis;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Azure;
 using Azure.Identity;
+using Azure.AI.FormRecognizer.DocumentAnalysis;
+using Azure;
 using AnaliseDocumentos.Core.Interfaces;
 using AnaliseDocumentos.Infrastructure.Services;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Server.Kestrel.Core; // Necessário para configurar limite de tamanho
 
 var host = new HostBuilder()
     .ConfigureFunctionsWebApplication()
@@ -13,7 +16,28 @@ var host = new HostBuilder()
     {
         var configuration = context.Configuration;
 
-        // Configuração Document Intelligence (Fail-Fast)
+        // 1. AUMENTAR LIMITE DE UPLOAD (Evita erro com PDFs grandes)
+        // Configura o Kestrel para aceitar até 100 MB (limite da Azure Function HTTP)
+        services.Configure<KestrelServerOptions>(options =>
+        {
+            options.Limits.MaxRequestBodySize = 104_857_600; // 100 MB
+        });
+
+        // 2. Configuração do Application Insights
+        services.AddApplicationInsightsTelemetryWorkerService();
+        services.ConfigureFunctionsApplicationInsights();
+
+        // 3. Configuração do Blob Storage
+        // O pacote Microsoft.Extensions.Azure deve estar instalado
+        var storageConnectionString = configuration["AzureWebJobsStorage"];
+        ArgumentException.ThrowIfNullOrEmpty(storageConnectionString, "AzureWebJobsStorage");
+
+        services.AddAzureClients(clientBuilder =>
+        {
+            clientBuilder.AddBlobServiceClient(storageConnectionString);
+        });
+
+        // 4. Configuração do Document Intelligence
         var docIntelEndpoint = configuration["DocIntelEndpoint"];
         var docIntelApiKey = configuration["DocIntelApiKey"];
 
@@ -21,20 +45,18 @@ var host = new HostBuilder()
 
         if (!string.IsNullOrEmpty(docIntelApiKey))
         {
-            // Usa chave de API se fornecida
             services.AddSingleton(new DocumentAnalysisClient(
-                new Uri(docIntelEndpoint), 
+                new Uri(docIntelEndpoint),
                 new AzureKeyCredential(docIntelApiKey)));
         }
         else
         {
-            // Caso contrário, usa Identidade Gerenciada
             services.AddSingleton(new DocumentAnalysisClient(
-                new Uri(docIntelEndpoint), 
+                new Uri(docIntelEndpoint),
                 new DefaultAzureCredential()));
         }
 
-        // Injeção dos serviços da aplicação
+        // 5. Injeção dos Serviços de Domínio
         services.AddScoped<IServicoOcr, ServicoAzureDocIntel>();
         services.AddScoped<IServicoFoundry, ServicoAgenteFoundry>();
     })
