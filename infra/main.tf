@@ -110,38 +110,36 @@ resource "azurerm_service_plan" "plan" {
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   os_type             = "Linux"
-  sku_name            = "Y1" # Consumption
+  sku_name            = "FC1" # Flex Consumption
 }
 
-resource "azurerm_linux_function_app" "func" {
-  name                       = "func-${var.project_name}-${random_string.sufixo.result}"
-  resource_group_name        = azurerm_resource_group.rg.name
-  location                   = azurerm_resource_group.rg.location
-  storage_account_name       = azurerm_storage_account.st.name
-  storage_account_access_key = azurerm_storage_account.st.primary_access_key
-  service_plan_id            = azurerm_service_plan.plan.id
-  https_only                 = true
+resource "azurerm_function_app_flex_consumption" "func" {
+  name                = "func-${var.project_name}-${random_string.sufixo.result}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  service_plan_id     = azurerm_service_plan.plan.id
+  storage_account_id  = azurerm_storage_account.st.id
+  https_only          = true
 
-  site_config {
-    application_stack {
-      dotnet_version              = "8.0"
-      use_dotnet_isolated_runtime = true
-    }
-    application_insights_key = azurerm_application_insights.ai.instrumentation_key
-    ftps_state               = "FtpsOnly"
-  }
+  runtime_name    = "dotnet-isolated"
+  runtime_version = "8.0"
 
   identity {
     type = "SystemAssigned"
   }
 
   app_settings = {
-    "AzureWebJobsStorage"      = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.st_conn_string.id})"
-    "FUNCTIONS_WORKER_RUNTIME" = "dotnet-isolated"
-    "DocIntelEndpoint"         = azurerm_cognitive_account.doc_intel.endpoint
-    "DocIntelApiKey"           = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.docintel_api_key.id})"
-    "FoundryApiUrl"            = "PENDENTE"
-    "FoundryApiKey"            = "PENDENTE"
+    "AzureWebJobsStorage"                   = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.st_conn_string.id})"
+    "FUNCTIONS_WORKER_RUNTIME"              = "dotnet-isolated"
+    "DocIntelEndpoint"                      = azurerm_cognitive_account.doc_intel.endpoint
+    "DocIntelApiKey"                        = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.docintel_api_key.id})"
+    "FoundryApiUrl"                         = "PENDENTE"
+    "FoundryApiKey"                         = "PENDENTE"
+    "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.ai.connection_string
+  }
+
+  site_config {
+    ftps_state = "FtpsOnly"
   }
 
   tags = var.tags
@@ -172,7 +170,14 @@ resource "azurerm_key_vault_secret" "docintel_api_key" {
 resource "azurerm_role_assignment" "func_kv_reader" {
   scope                = azurerm_key_vault.kv.id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+  principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
+}
+
+# Permissão para a Function App acessar o Storage (necessário para Flex Consumption)
+resource "azurerm_role_assignment" "func_storage_owner" {
+  scope                = azurerm_storage_account.st.id
+  role_definition_name = "Storage Blob Data Owner"
+  principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
 }
 
 # Permissão para o usuário/sp logado poder adicionar segredos
@@ -193,7 +198,7 @@ resource "azurerm_role_assignment" "current_user_kv_reader" {
 resource "azurerm_role_assignment" "func_doc_intel_role" {
   scope                = azurerm_cognitive_account.doc_intel.id
   role_definition_name = "Cognitive Services User"
-  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+  principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
 }
 
 # Adicione isso ao final do arquivo infra/main.tf
@@ -202,12 +207,12 @@ resource "azurerm_role_assignment" "func_doc_intel_role" {
 resource "azurerm_role_assignment" "func_ai_developer" {
   scope                = azurerm_resource_group.rg.id
   role_definition_name = "Azure AI Developer"
-  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+  principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
 }
 
 # Permissão para a Function usar serviços Cognitivos/OpenAI
 resource "azurerm_role_assignment" "func_cognitive_user" {
   scope                = azurerm_resource_group.rg.id
   role_definition_name = "Cognitive Services OpenAI Contributor"
-  principal_id         = azurerm_linux_function_app.func.identity[0].principal_id
+  principal_id         = azurerm_function_app_flex_consumption.func.identity[0].principal_id
 }
