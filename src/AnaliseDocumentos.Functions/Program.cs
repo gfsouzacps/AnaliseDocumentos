@@ -28,13 +28,27 @@ var host = new HostBuilder()
         services.ConfigureFunctionsApplicationInsights();
 
         // 3. Configuração do Blob Storage
-        // O pacote Microsoft.Extensions.Azure deve estar instalado
-        var storageConnectionString = configuration["AzureWebJobsStorage"];
-        ArgumentException.ThrowIfNullOrEmpty(storageConnectionString, "AzureWebJobsStorage");
-
         services.AddAzureClients(clientBuilder =>
         {
-            clientBuilder.AddBlobServiceClient(storageConnectionString);
+            // Tenta ler a Connection String (Local) ou a URI do serviço (Produção/Identity)
+            var connectionString = configuration["AzureWebJobsStorage"];
+            var blobServiceUri = configuration["AzureWebJobsStorage:blobServiceUri"];
+
+            // Prioriza Identity se a URI estiver configurada (Cenário de Produção sem chaves)
+            if (!string.IsNullOrEmpty(blobServiceUri))
+            {
+                clientBuilder.AddBlobServiceClient(new Uri(blobServiceUri));
+                clientBuilder.UseCredential(new DefaultAzureCredential());
+            }
+            // Fallback para Connection String (Cenário Local)
+            else if (!string.IsNullOrEmpty(connectionString))
+            {
+                clientBuilder.AddBlobServiceClient(connectionString);
+            }
+            else
+            {
+                throw new InvalidOperationException("Configuração do Storage não encontrada. Verifique 'AzureWebJobsStorage' ou 'AzureWebJobsStorage:blobServiceUri'.");
+            }
         });
 
         // 4. Configuração do Document Intelligence

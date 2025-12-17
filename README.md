@@ -96,3 +96,8 @@ O provisionamento da infraestrutura é totalmente automatizado via Terraform. O 
 Para instruções detalhadas de como realizar o deploy em ambientes de QA ou Produção, consulte o guia dedicado:
 
 👉 **[Guia de Deployment (deploy.md)](./deploy.md)**
+
+## ⚠️ Limitações do Sistema
+
+Para detalhes sobre tamanhos máximos de arquivo, limites de páginas e restrições da IA, consulte o documento:
+👉 **[Limitações Técnicas (limitacoes.md)](./limitacoes.md)**

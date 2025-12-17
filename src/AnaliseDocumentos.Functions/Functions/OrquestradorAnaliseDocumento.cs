@@ -33,12 +33,11 @@ public class OrquestradorAnaliseDocumento
 
     [Function("SubmeterDocumento")]
     public async Task<HttpResponseData> SubmeterDocumento(
-        [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData requisicao,
-        [DurableClient] DurableTaskClient cliente)
+            [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData requisicao,
+            [DurableClient] DurableTaskClient cliente)
     {
         _logger.LogInformation("Recebendo documento para upload...");
 
-        // CORREÇÃO CRÍTICA: Não verificar .Length (quebra o stream). Verificar apenas se é nulo.
         if (requisicao.Body == null)
         {
             var respostaRuim = requisicao.CreateResponse(HttpStatusCode.BadRequest);
@@ -48,7 +47,7 @@ public class OrquestradorAnaliseDocumento
 
         try
         {
-            // 1. Detectar extensão via Header
+            // 1. Detectar extensão
             string contentType = "application/octet-stream";
             if (requisicao.Headers.TryGetValues("Content-Type", out var headerValues))
             {
@@ -56,38 +55,30 @@ public class OrquestradorAnaliseDocumento
             }
             string extensao = ObterExtensaoPorMimeType(contentType);
 
-            // 2. Upload para Blob Storage (Padrão Claim Check)
+            // 2. Upload para Blob Storage
             var containerClient = _blobServiceClient.GetBlobContainerClient("documentos-upload");
             await containerClient.CreateIfNotExistsAsync();
 
             string blobName = $"{Guid.NewGuid()}{extensao}";
             var blobClient = containerClient.GetBlobClient(blobName);
 
-            _logger.LogInformation($"Iniciando upload para Blob: {blobName} (Tipo: {contentType})...");
+            _logger.LogInformation($"Iniciando upload para Blob: {blobName}...");
 
             var opcoesUpload = new BlobUploadOptions
             {
                 HttpHeaders = new BlobHttpHeaders { ContentType = contentType }
             };
 
-            // Upload via Stream direto (Sem carregar tudo na memória RAM)
             await blobClient.UploadAsync(requisicao.Body, opcoesUpload);
 
-            _logger.LogInformation("Upload concluído. Gerando SAS...");
+            // 3. Obter URL direta (SEM SAS)
+            // A "Solução 2" permite que o Doc Intelligence leia direto via RBAC
+            Uri urlDireta = blobClient.Uri;
 
-            // 3. Gerar SAS URI (Token de leitura temporário para o OCR)
-            var sasBuilder = new BlobSasBuilder
-            {
-                BlobContainerName = containerClient.Name,
-                BlobName = blobName,
-                Resource = "b",
-                ExpiresOn = DateTimeOffset.UtcNow.AddHours(24)
-            };
-            sasBuilder.SetPermissions(BlobSasPermissions.Read);
-            Uri sasUri = blobClient.GenerateSasUri(sasBuilder);
+            _logger.LogInformation($"Upload concluído. URL do blob: {urlDireta}");
 
-            // 4. Inicia Orquestração passando APENAS A URL
-            string idInstancia = await cliente.ScheduleNewOrchestrationInstanceAsync("OrquestradorDocumento", sasUri.ToString());
+            // 4. Inicia Orquestração passando a URL limpa
+            string idInstancia = await cliente.ScheduleNewOrchestrationInstanceAsync("OrquestradorDocumento", urlDireta.ToString());
 
             _logger.LogInformation($"Orquestração iniciada: {idInstancia}");
 
@@ -95,7 +86,7 @@ public class OrquestradorAnaliseDocumento
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Erro no processamento do upload: {Message}", ex.Message);
+            _logger.LogError(ex, "Erro no processamento: {Message}", ex.Message);
             var erro = requisicao.CreateResponse(HttpStatusCode.InternalServerError);
             await erro.WriteStringAsync($"Erro interno: {ex.Message}");
             return erro;

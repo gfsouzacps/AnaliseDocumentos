@@ -290,3 +290,4 @@ __pycache__/
 **/Properties/serviceDependencies.func-analisecontratos-vu1 - Zip Deploy.json
 
 **/Properties/serviceDependencies.json
+src/AnaliseDocumentos.Functions/local.settings.meuambiente.json
