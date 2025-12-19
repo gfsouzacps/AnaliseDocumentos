@@ -1,0 +1,7 @@
+azure-functions
+azure-functions-durable
+azure-storage-blob
+azure-identity
+azure-ai-documentintelligence
+azure-ai-projects
+azure-ai-agents
