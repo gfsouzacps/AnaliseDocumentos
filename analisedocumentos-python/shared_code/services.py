@@ -3,7 +3,7 @@ import os
 import time
 from azure.identity import DefaultAzureCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.ai.documentintelligence.models import AnalyzeResult
+from azure.ai.documentintelligence.models import AnalyzeResult, AnalyzeDocumentRequest
 from azure.ai.projects import AIProjectClient
 # Importação segura de modelos para evitar erros se a lib mudar
 from azure.ai.agents.models import MessageRole
@@ -25,10 +25,24 @@ class OcrService:
     def extrair_texto(self, file_bytes: bytes, content_type: str) -> str:
         if not self._client:
             raise ValueError("OCR Service not initialized properly (missing endpoint).")
+
+        logging.info(f"Starting OCR from byte stream...")
         
-        logging.info(f"Starting OCR (Content-Type: {content_type})...")
-        poller = self._client.begin_analyze_document(
-            "prebuilt-layout", analyze_request=file_bytes, content_type=content_type
+        request = AnalyzeDocumentRequest(
+            bytes_source=file_bytes
+        )
+        
+        poller = self._client.begin_analyze_document("prebuilt-layout", request, content_type=content_type)
+        resultado: AnalyzeResult = poller.result()
+        return "\n".join([p.content for p in resultado.paragraphs]) if resultado.paragraphs else ""
+
+    def extrair_texto_de_url(self, url_arquivo: str) -> str:
+        if not self._client:
+            raise ValueError("OCR Service not initialized properly (missing endpoint).")
+        
+        logging.info(f"Starting OCR from URL...")
+        poller = self._client.begin_analyze_document_from_url(
+            "prebuilt-layout", document_url=url_arquivo
         )
         resultado: AnalyzeResult = poller.result()
         return "\n".join([p.content for p in resultado.paragraphs]) if resultado.paragraphs else ""
